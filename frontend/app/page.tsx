@@ -1,0 +1,400 @@
+'use client'
+
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { FlowTimeline } from '../components/FlowTimeline'
+import { KPICard } from '../components/KPICard'
+import { ConstraintsPanel } from '../components/ConstraintsPanel'
+import { ConflictPanel } from '../components/ConflictPanel'
+import { EvaluatorScore } from '../components/EvaluatorScore'
+import { HandoffDrawer } from '../components/HandoffDrawer'
+import { ConfidenceBadge } from '../components/ConfidenceBadge'
+import { FlowSelector } from '../components/FlowSelector'
+import { ModeSelector } from '../components/ModeSelector'
+
+interface FlowNode {
+  agent: string
+  status: string
+  started_at?: string
+  ended_at?: string
+}
+
+interface AgentOutput {
+  kpis: any[]
+  insights: string[]
+}
+
+export default function Home() {
+  const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  const [selectedFlow, setSelectedFlow] = useState('kpi_review')
+  const [selectedMode, setSelectedMode] = useState('summary')
+  const [selectedHandoff, setSelectedHandoff] = useState<any>(null)
+
+  // Realtime state
+  const [nodes, setNodes] = useState<Record<string, FlowNode>>({})
+  const [currentNode, setCurrentNode] = useState<string | null>(null)
+  const [confidence, setConfidence] = useState<any>(null)
+  const [agentOutputs, setAgentOutputs] = useState<Record<string, AgentOutput>>({})
+  const [handoffs, setHandoffs] = useState<any[]>([])
+  const [evaluation, setEvaluation] = useState<any>(null)
+  const [constraintsStatus, setConstraintsStatus] = useState<Record<string, string>>({})
+  const [streamStatus, setStreamStatus] = useState<string>('')
+
+  const eventSourceRef = useRef<EventSource | null>(null)
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+      }
+    }
+  }, [])
+
+  const runFlowWithStreaming = useCallback(async () => {
+    // Reset state
+    setLoading(true)
+    setSession(null)
+    setNodes({})
+    setCurrentNode(null)
+    setConfidence(null)
+    setAgentOutputs({})
+    setHandoffs([])
+    setEvaluation(null)
+    setConstraintsStatus({})
+    setStreamStatus('Starting...')
+
+    // Close existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+    }
+
+    const flowType = selectedFlow.replace('_', '-')
+    const url = `http://localhost:8000/api/flows/stream/${flowType}?mode=${selectedMode}&period_start=2025-11-01&period_end=2026-01-30`
+
+    console.log('Connecting to:', url)
+    const eventSource = new EventSource(url)
+    eventSourceRef.current = eventSource
+
+    eventSource.onopen = () => {
+      console.log('SSE connection opened')
+      setStreamStatus('Connected...')
+    }
+
+    eventSource.addEventListener('session_start', (e) => {
+      console.log('session_start:', e.data)
+      const data = JSON.parse(e.data)
+      setStreamStatus(`Session ${data.session_id} started`)
+
+      // Initialize nodes from flow spec
+      const initialNodes: Record<string, FlowNode> = {}
+      data.flow.nodes.forEach((nodeName: string) => {
+        initialNodes[nodeName] = { agent: nodeName, status: 'pending' }
+      })
+      setNodes(initialNodes)
+    })
+
+    eventSource.addEventListener('confidence', (e) => {
+      const data = JSON.parse(e.data)
+      setConfidence(data)
+      setStreamStatus(`Confidence: ${data.level}`)
+    })
+
+    eventSource.addEventListener('agent_start', (e) => {
+      const data = JSON.parse(e.data)
+      setCurrentNode(data.agent)
+      setStreamStatus(`Running ${data.agent}...`)
+
+      setNodes(prev => ({
+        ...prev,
+        [data.agent]: {
+          ...prev[data.agent],
+          status: 'active',
+          started_at: data.started_at,
+        }
+      }))
+    })
+
+    eventSource.addEventListener('agent_complete', (e) => {
+      const data = JSON.parse(e.data)
+      setStreamStatus(`${data.agent} complete`)
+
+      setNodes(prev => ({
+        ...prev,
+        [data.agent]: {
+          ...prev[data.agent],
+          status: 'completed',
+          ended_at: data.ended_at,
+        }
+      }))
+
+      // Store agent output if present
+      if (data.kpis || data.insights) {
+        setAgentOutputs(prev => ({
+          ...prev,
+          [data.agent]: {
+            kpis: data.kpis || [],
+            insights: data.insights || [],
+          }
+        }))
+      }
+    })
+
+    eventSource.addEventListener('handoff', (e) => {
+      const data = JSON.parse(e.data)
+      setHandoffs(prev => [...prev, data])
+    })
+
+    eventSource.addEventListener('evaluation', (e) => {
+      const data = JSON.parse(e.data)
+      setEvaluation(data)
+      setStreamStatus('Evaluation complete')
+    })
+
+    eventSource.addEventListener('session_complete', (e) => {
+      const data = JSON.parse(e.data)
+      setCurrentNode(null)
+      setConstraintsStatus(data.constraints_status || {})
+      setStreamStatus('Complete')
+      setLoading(false)
+
+      // Build full session object for exports
+      setSession({
+        session_id: data.session_id,
+        ended_at: data.ended_at,
+        constraints_status: data.constraints_status,
+      })
+
+      eventSource.close()
+    })
+
+    eventSource.addEventListener('agent_error', (e) => {
+      const data = JSON.parse(e.data)
+      setStreamStatus(`Error: ${data.error}`)
+
+      setNodes(prev => ({
+        ...prev,
+        [data.agent]: {
+          ...prev[data.agent],
+          status: 'failed',
+        }
+      }))
+    })
+
+    eventSource.onerror = (err) => {
+      console.error('SSE error:', err)
+      setStreamStatus('Connection error - check console')
+      setLoading(false)
+      eventSource.close()
+    }
+
+    // Debug: log all messages
+    eventSource.onmessage = (e) => {
+      console.log('SSE message:', e.data)
+    }
+  }, [selectedFlow, selectedMode])
+
+  // Get all KPIs from CEO output
+  const ceoKpis = agentOutputs['CEO']?.kpis || []
+
+  return (
+    <main className="container mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Boardroom-in-a-Box</h1>
+          <p className="text-gray-600">AI-powered retail decision system</p>
+        </div>
+        <div className="flex gap-4 items-center">
+          {confidence && (
+            <ConfidenceBadge confidence={confidence} />
+          )}
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="bg-white rounded-lg shadow p-6 mb-8">
+        <div className="flex gap-6 items-end">
+          <FlowSelector
+            selected={selectedFlow}
+            onSelect={setSelectedFlow}
+          />
+          <ModeSelector
+            selected={selectedMode}
+            onSelect={setSelectedMode}
+          />
+          <button
+            onClick={runFlowWithStreaming}
+            disabled={loading}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center gap-2"
+          >
+            {loading && (
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            )}
+            {loading ? streamStatus : 'Run Analysis'}
+          </button>
+        </div>
+      </div>
+
+      {/* Constraints Panel */}
+      {Object.keys(constraintsStatus).length > 0 && (
+        <div className="mb-8">
+          <ConstraintsPanel
+            constraints={{}}
+            status={constraintsStatus}
+          />
+        </div>
+      )}
+
+      {/* Flow Timeline - Always show if nodes exist */}
+      {Object.keys(nodes).length > 0 && (
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold">Flow Timeline</h2>
+            {loading && (
+              <span className="text-sm text-blue-600 animate-pulse">{streamStatus}</span>
+            )}
+          </div>
+          <FlowTimeline
+            nodes={nodes}
+            edges={[]}
+            currentNode={currentNode}
+            agentOutputs={agentOutputs}
+            handoffs={handoffs}
+            onNodeClick={(node: any) => {
+              const handoff = handoffs.find(
+                (h: any) => h.from === node.agent
+              )
+              setSelectedHandoff(handoff)
+            }}
+          />
+        </div>
+      )}
+
+      {/* Main Content Grid - Show as data arrives */}
+      {(ceoKpis.length > 0 || evaluation) && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* KPIs */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Key Metrics</h2>
+              <div className="grid grid-cols-2 gap-4">
+                {ceoKpis.map((kpi: any, idx: number) => (
+                  <KPICard key={idx} kpi={kpi} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Evaluator Score */}
+          <div>
+            {evaluation ? (
+              <EvaluatorScore evaluation={evaluation} />
+            ) : (
+              <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+                <div className="h-6 bg-gray-200 rounded w-1/2 mb-4"></div>
+                <div className="h-32 bg-gray-200 rounded"></div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Agent Insights */}
+      {Object.keys(agentOutputs).length > 0 && (
+        <div className="mt-8 bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Agent Insights</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {Object.entries(agentOutputs).map(([agent, output]) => (
+              <div key={agent} className="border rounded-lg p-4">
+                <h3 className="font-semibold text-gray-900 mb-2">{agent}</h3>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  {output.insights.slice(0, 2).map((insight, idx) => (
+                    <li key={idx} className="truncate" title={insight}>• {insight}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Conflicts */}
+      {evaluation?.conflicts?.length > 0 && (
+        <div className="mt-8">
+          <ConflictPanel conflicts={evaluation.conflicts} />
+        </div>
+      )}
+
+      {/* Decisions */}
+      {evaluation?.decisions?.length > 0 && (
+        <div className="mt-8 bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Recommended Actions</h2>
+          <div className="space-y-4">
+            {evaluation.decisions.map((decision: any, idx: number) => (
+              <div key={idx} className="border-l-4 border-blue-500 pl-4 py-2">
+                <p className="font-medium">{decision.action}</p>
+                <p className="text-sm text-gray-600">Impact: {decision.impact}</p>
+                <div className="flex gap-2 mt-1">
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    decision.priority === 'High' ? 'bg-red-100 text-red-800' :
+                    decision.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-green-100 text-green-800'
+                  }`}>
+                    {decision.priority}
+                  </span>
+                  {decision.confidence && (
+                    <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-800">
+                      {decision.confidence}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Export Buttons */}
+      {session?.session_id && (
+        <div className="mt-8 flex gap-4">
+          <a
+            href={`/api/sessions/${session.session_id}/memo`}
+            target="_blank"
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            Download Board Memo
+          </a>
+          <a
+            href={`/api/sessions/${session.session_id}/evidence`}
+            target="_blank"
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+          >
+            Download Evidence Pack
+          </a>
+          <button
+            onClick={() => {
+              fetch(`/api/sessions/${session.session_id}/email-summary`)
+                .then(r => r.text())
+                .then(text => navigator.clipboard.writeText(text))
+            }}
+            className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+          >
+            Copy Summary
+          </button>
+        </div>
+      )}
+
+      {/* Handoff Drawer */}
+      {selectedHandoff && (
+        <HandoffDrawer
+          handoff={selectedHandoff}
+          onClose={() => setSelectedHandoff(null)}
+        />
+      )}
+    </main>
+  )
+}
