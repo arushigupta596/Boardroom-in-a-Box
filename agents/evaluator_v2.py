@@ -21,7 +21,7 @@ from enum import Enum
 import json
 from datetime import datetime
 
-from .base_agent import DatabaseConnection
+from .base_agent import DatabaseConnection, create_db_connection
 from .contract import AgentOutput, AgentRole, Confidence
 from .handoff import (
     HandoffPayload, RiskFlag, Severity, DecisionConstraint,
@@ -152,7 +152,7 @@ class EvaluatorV2:
     """
 
     def __init__(self, db: DatabaseConnection = None):
-        self.db = db or DatabaseConnection()
+        self.db = db or create_db_connection()
         self.constraints = get_default_constraints()
         self._conflict_counter = 0
 

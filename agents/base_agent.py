@@ -11,12 +11,41 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from decimal import Decimal
 from datetime import date, datetime
+import os
 
 from .contract import (
     AgentOutput, AgentRole, KPI, Recommendation, Evidence,
     Trend, Confidence, validate_agent_output
 )
 from .sql_guardrails import SQLGuardrails, GuardrailViolation
+
+
+def get_db_config() -> dict:
+    """
+    Get database configuration from environment variables.
+    Supports both local development and cloud databases (Vercel Postgres, Neon, etc.)
+    """
+    return {
+        "host": os.getenv("DB_HOST", "localhost"),
+        "port": int(os.getenv("DB_PORT", "5432")),
+        "database": os.getenv("DB_NAME", "retail_erp"),
+        "user": os.getenv("DB_USER", os.getenv("USER", "postgres")),
+        "password": os.getenv("DB_PASSWORD", ""),
+        "sslmode": os.getenv("DB_SSLMODE"),  # "require" for cloud DBs
+    }
+
+
+def create_db_connection() -> "DatabaseConnection":
+    """Create a database connection from environment variables."""
+    config = get_db_config()
+    return DatabaseConnection(
+        host=config["host"],
+        port=config["port"],
+        database=config["database"],
+        user=config["user"],
+        password=config["password"],
+        sslmode=config["sslmode"],
+    )
 
 
 class DatabaseConnection:
@@ -28,7 +57,8 @@ class DatabaseConnection:
         port: int = 5432,
         database: str = "retail_erp",
         user: str = "arushigupta",
-        password: str = ""
+        password: str = "",
+        sslmode: str = None
     ):
         self.config = {
             "host": host,
@@ -37,6 +67,9 @@ class DatabaseConnection:
             "user": user,
             "password": password
         }
+        # Add SSL mode for cloud databases (Vercel Postgres, Neon, etc.)
+        if sslmode:
+            self.config["sslmode"] = sslmode
         self._conn = None
 
     def connect(self):
@@ -108,9 +141,10 @@ class GuardrailedDatabaseConnection(DatabaseConnection):
         database: str = "retail_erp",
         user: str = "arushigupta",
         password: str = "",
+        sslmode: str = None,
         enforce_guardrails: bool = True
     ):
-        super().__init__(host, port, database, user, password)
+        super().__init__(host, port, database, user, password, sslmode)
         self.role = role.upper()
         self.enforce_guardrails = enforce_guardrails
         self._guardrails = SQLGuardrails(role) if enforce_guardrails else None

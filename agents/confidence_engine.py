@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 from datetime import datetime, timedelta
 
-from .base_agent import DatabaseConnection
+from .base_agent import DatabaseConnection, create_db_connection
 
 
 class ConfidenceLevel(Enum):
@@ -96,7 +96,7 @@ class ConfidenceEngine:
     COVERAGE_THRESHOLD = 90  # % coverage required
 
     def __init__(self, db: DatabaseConnection = None):
-        self.db = db or DatabaseConnection()
+        self.db = db or create_db_connection()
 
     def assess(self) -> ConfidenceReport:
         """

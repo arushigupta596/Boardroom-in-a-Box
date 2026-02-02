@@ -18,7 +18,7 @@ from datetime import datetime
 import uuid
 import json
 
-from .base_agent import DatabaseConnection
+from .base_agent import DatabaseConnection, create_db_connection
 from .contract import AgentOutput, AgentRole
 from .handoff import HandoffPayload, RiskFlag, Severity, FocusArea, get_default_constraints
 from .evaluator_v2 import EvaluatorV2, EvaluatorOutput
@@ -205,7 +205,7 @@ class FlowOrchestrator:
     """
 
     def __init__(self, db: DatabaseConnection = None):
-        self.db = db or DatabaseConnection()
+        self.db = db or create_db_connection()
 
         # Initialize agents
         self.agents = {
