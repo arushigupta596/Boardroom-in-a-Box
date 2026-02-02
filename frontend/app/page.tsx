@@ -70,7 +70,8 @@ export default function Home() {
     }
 
     const flowType = selectedFlow.replace('_', '-')
-    const url = `http://localhost:8000/api/flows/stream/${flowType}?mode=${selectedMode}&period_start=2025-11-01&period_end=2026-01-30`
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    const url = `${apiBase}/api/flows/stream/${flowType}?mode=${selectedMode}&period_start=2025-11-01&period_end=2026-01-30`
 
     console.log('Connecting to:', url)
     const eventSource = new EventSource(url)

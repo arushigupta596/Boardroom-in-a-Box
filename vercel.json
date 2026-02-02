@@ -3,7 +3,10 @@
   "builds": [
     {
       "src": "api/main.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
     },
     {
       "src": "frontend/package.json",
@@ -19,11 +22,5 @@
       "src": "/(.*)",
       "dest": "frontend/$1"
     }
-  ],
-  "env": {
-    "POSTGRES_HOST": "@postgres_host",
-    "POSTGRES_DB": "@postgres_db",
-    "POSTGRES_USER": "@postgres_user",
-    "POSTGRES_PASSWORD": "@postgres_password"
-  }
+  ]
 }
