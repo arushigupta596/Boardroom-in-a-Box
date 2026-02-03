@@ -734,6 +734,171 @@ async def llm_status():
     }
 
 
+# ============================================================
+# LangChain Chat Endpoint
+# ============================================================
+
+# Try to import LangChain orchestrator
+try:
+    from agents.langchain_orchestrator import LangChainOrchestrator, StreamingBoardroomChat
+    LANGCHAIN_AVAILABLE = True
+except Exception as e:
+    LANGCHAIN_AVAILABLE = False
+    LANGCHAIN_ERROR = str(e)
+
+
+class ChatRequest(BaseModel):
+    """Request for /chat endpoint."""
+    message: str
+    session_id: Optional[str] = None  # For conversation continuity
+    quick_mode: bool = False  # Use full agent flow (with real data) by default
+
+
+class ChatResponse(BaseModel):
+    """Response from /chat endpoint."""
+    message: str
+    flow_used: str
+    flow_reasoning: str
+    confidence: float
+    session_id: str
+    key_findings: List[str]
+    recommendations: List[str]
+    risks: List[str]
+    overall_score: Optional[float] = None
+
+
+@app.post("/api/chat")
+async def chat_with_boardroom(request: ChatRequest):
+    """
+    Natural language chat interface to the boardroom.
+
+    Send a question in plain English, and the system will:
+    1. Analyze your question to determine the best analysis approach
+    2. Route to the appropriate agent flow (KPI Review, Trade-off, etc.)
+    3. Execute the flow with all relevant agents
+    4. Synthesize a decision with recommendations
+
+    Examples:
+    - "How is the business performing this quarter?"
+    - "Should we run more promotions or focus on margins?"
+    - "Why did sales drop in the East region?"
+    - "What would happen if we increased prices by 10%?"
+    - "Prepare a summary for the board meeting"
+
+    Returns a structured decision with findings, recommendations, and risks.
+    """
+    if not LANGCHAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LangChain not available. Error: {LANGCHAIN_ERROR}"
+        )
+
+    try:
+        orchestrator = LangChainOrchestrator()
+        result = orchestrator.chat_sync(request.message, quick_mode=request.quick_mode)
+
+        # Build response with full session data
+        response = {
+            "message": result["decision"]["summary"],
+            "flow_used": result["flow_selection"]["flow_type"],
+            "flow_reasoning": result["flow_selection"]["reasoning"],
+            "confidence": result["flow_selection"]["confidence"],
+            "session_id": result["session"]["session_id"],
+            "agents_involved": result["session"]["agents_involved"],
+            "key_findings": result["decision"]["key_findings"],
+            "recommendations": result["decision"]["recommendations"],
+            "risks": result["decision"]["risks"],
+            "confidence_level": result["decision"]["confidence_level"],
+            "next_steps": result["decision"]["next_steps"],
+            "overall_score": result["session"]["overall_score"],
+        }
+
+        # Add full session data if available (from full agent flow)
+        if "full_session" in result:
+            session = result["full_session"]
+            # Agent outputs with KPIs and insights
+            response["agent_outputs"] = {}
+            for agent_name, output in session.agent_outputs.items():
+                if output:
+                    response["agent_outputs"][agent_name] = {
+                        "kpis": [kpi.to_dict() if hasattr(kpi, 'to_dict') else kpi for kpi in (output.kpis or [])],
+                        "insights": output.insights or [],
+                        "recommendations": [rec.to_dict() if hasattr(rec, 'to_dict') else {"action": str(rec)} for rec in (output.recommendations or [])],
+                        "risks": output.risks or [],
+                    }
+
+            # Handoffs (agent-to-agent communication)
+            response["handoffs"] = [h.to_dict() if hasattr(h, 'to_dict') else h for h in session.handoffs]
+
+            # Evaluation with conflicts
+            if session.evaluation:
+                eval_data = session.evaluation
+                response["evaluation"] = {
+                    "overall_score": eval_data.overall_score,
+                    "risk_level": eval_data.risk_level,
+                    "confidence": eval_data.confidence,
+                    "dimension_scores": [d.to_dict() for d in eval_data.dimension_scores],
+                    "conflicts": [c.to_dict() for c in eval_data.conflicts],
+                    "has_blocking_conflicts": eval_data.has_blocking_conflicts,
+                    "decisions": [d.to_dict() for d in eval_data.decisions],
+                }
+
+        return response
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/chat/stream/{question}")
+async def stream_chat(question: str):
+    """
+    Streaming chat interface with real-time progress updates.
+
+    Returns Server-Sent Events (SSE) with progress as the analysis runs:
+    - routing: Analyzing your question
+    - flow_selected: Flow has been chosen
+    - agent_start: An agent is starting analysis
+    - agent_complete: An agent has finished
+    - synthesizing: Generating final decision
+    - decision: Final decision with recommendations
+
+    Use this for a real-time chat experience.
+    """
+    if not LANGCHAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LangChain not available. Error: {LANGCHAIN_ERROR}"
+        )
+
+    async def event_generator():
+        try:
+            chat = StreamingBoardroomChat()
+            async for event in chat.stream_chat(question):
+                yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.get("/api/chat/status")
+async def chat_status():
+    """Check if LangChain chat is available."""
+    return {
+        "available": LANGCHAIN_AVAILABLE,
+        "error": LANGCHAIN_ERROR if not LANGCHAIN_AVAILABLE else None,
+    }
+
+
 # Vercel serverless handler
 if __name__ == "__main__":
     import uvicorn
