@@ -54,19 +54,34 @@ Boardroom-in-a-Box simulates a C-suite executive meeting where AI agents (CEO, C
 
 ### Prerequisites
 - Python 3.11+
-- PostgreSQL 14+
 - Node.js 18+
 - OpenRouter API key (for LLM features)
+- Supabase account (for cloud database) or PostgreSQL 14+ (for local)
 
 ### 1. Database Setup
+
+**Option A: Supabase (Recommended for deployment)**
+
+The project uses [Supabase](https://supabase.com) as the cloud database:
+
+1. Create a Supabase project at https://supabase.com
+2. Run the schema SQL in Supabase SQL Editor:
+   ```sql
+   -- Copy contents from supabase_schema.sql
+   ```
+3. Load data using the API loader:
+   ```bash
+   python load_to_supabase.py
+   ```
+
+**Option B: Local PostgreSQL**
 
 ```bash
 # Create database
 createdb retail_erp
 
 # Load schema and data
-psql -d retail_erp -f schema/retail_schema.sql
-python scripts/load_data.py
+python setup_retail_db.py
 ```
 
 ### 2. Backend Setup
@@ -81,7 +96,9 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your OPENROUTER_API_KEY
+# Edit .env with your settings:
+#   - OPENROUTER_API_KEY (required for LLM features)
+#   - DB_HOST, DB_USER, DB_PASSWORD (for Supabase or local DB)
 
 # Start API server
 cd api && uvicorn main:app --reload --port 8000
@@ -195,7 +212,7 @@ curl -X POST http://localhost:8000/api/query \
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Database                                   │
-│                      (PostgreSQL)                                │
+│                (Supabase / PostgreSQL)                           │
 │  ┌─────────────────────────────────────────────────────────────┐ │
 │  │ ceo_views │ cfo_views │ cmo_views │ cio_views │ eval_views  │ │
 │  └─────────────────────────────────────────────────────────────┘ │
@@ -249,16 +266,31 @@ boardroom-agents-for-retail/
 # Required for LLM features
 OPENROUTER_API_KEY=sk-or-v1-your-key
 
-# Database (optional - defaults shown)
-DB_HOST=localhost
+# Database - Supabase (recommended)
+DB_HOST=db.your-project.supabase.co
 DB_PORT=5432
-DB_NAME=retail_erp
-DB_USER=your_user
-DB_PASSWORD=
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASSWORD=your-supabase-password
+DB_SSLMODE=require
+
+# Database - Local PostgreSQL (alternative)
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_NAME=retail_erp
+# DB_USER=your_user
+# DB_PASSWORD=
 
 # API
 API_PORT=8000
 ```
+
+### Supabase Setup
+
+1. Create a project at [supabase.com](https://supabase.com)
+2. Run `supabase_schema.sql` in the SQL Editor
+3. Run `python load_to_supabase.py` to load data
+4. Copy your database credentials to `.env`
 
 ## Data Model
 

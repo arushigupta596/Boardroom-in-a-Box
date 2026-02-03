@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """
-Setup Vercel Postgres Database
-==============================
+Setup Vercel/Neon Postgres Database
+===================================
 Loads the retail ERP schema and data into a cloud Postgres database.
 
 Usage:
-    1. Set environment variables:
-       export DB_HOST=your-host.postgres.vercel-storage.com
-       export DB_NAME=verceldb
-       export DB_USER=default
-       export DB_PASSWORD=your-password
-       export DB_SSLMODE=require
-
+    1. Set environment variables in .env file
     2. Run: python setup_vercel_db.py
 """
 
@@ -46,11 +40,11 @@ DATA_DIR = Path(__file__).parent / "Data" / "retail_erp_excel_tables"
 
 
 def create_schema(conn):
-    """Create database schema."""
+    """Create database schema matching Excel data."""
     print("Creating schema...")
 
     schema_sql = """
-    -- Drop existing tables
+    -- Drop existing tables (in reverse dependency order)
     DROP TABLE IF EXISTS transfer_order_line CASCADE;
     DROP TABLE IF EXISTS transfer_order CASCADE;
     DROP TABLE IF EXISTS return_line CASCADE;
@@ -67,8 +61,8 @@ def create_schema(conn):
     DROP TABLE IF EXISTS price_list CASCADE;
     DROP TABLE IF EXISTS dc_inventory CASCADE;
     DROP TABLE IF EXISTS store_inventory CASCADE;
-    DROP TABLE IF EXISTS sku CASCADE;
     DROP TABLE IF EXISTS supplier_product CASCADE;
+    DROP TABLE IF EXISTS sku CASCADE;
     DROP TABLE IF EXISTS supplier CASCADE;
     DROP TABLE IF EXISTS product CASCADE;
     DROP TABLE IF EXISTS product_category CASCADE;
@@ -77,198 +71,234 @@ def create_schema(conn):
     DROP TABLE IF EXISTS store CASCADE;
     DROP TABLE IF EXISTS customer CASCADE;
 
-    -- Create tables
+    -- Create tables matching Excel structure (all IDs are VARCHAR with prefixes)
+
     CREATE TABLE brand (
-        brand_id SERIAL PRIMARY KEY,
+        brand_id VARCHAR(20) PRIMARY KEY,
         brand_name VARCHAR(100) NOT NULL
     );
 
     CREATE TABLE product_category (
-        category_id SERIAL PRIMARY KEY,
-        category_name VARCHAR(100) NOT NULL,
-        parent_category_id INTEGER REFERENCES product_category(category_id)
+        category_id VARCHAR(20) PRIMARY KEY,
+        parent_category_id VARCHAR(20),
+        category_name VARCHAR(100) NOT NULL
     );
 
     CREATE TABLE product (
-        product_id SERIAL PRIMARY KEY,
+        product_id VARCHAR(20) PRIMARY KEY,
+        brand_id VARCHAR(20) REFERENCES brand(brand_id),
+        category_id VARCHAR(20) REFERENCES product_category(category_id),
         product_name VARCHAR(200) NOT NULL,
-        brand_id INTEGER REFERENCES brand(brand_id),
-        category_id INTEGER REFERENCES product_category(category_id),
-        unit_cost DECIMAL(10,2),
-        unit_price DECIMAL(10,2)
+        status VARCHAR(30)
     );
 
     CREATE TABLE store (
-        store_id SERIAL PRIMARY KEY,
-        store_name VARCHAR(100) NOT NULL,
+        store_id VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
         city VARCHAR(100),
-        state VARCHAR(50),
-        region VARCHAR(50)
+        region VARCHAR(50),
+        store_format VARCHAR(50)
     );
 
     CREATE TABLE dc (
-        dc_id SERIAL PRIMARY KEY,
-        dc_name VARCHAR(100) NOT NULL,
-        city VARCHAR(100),
-        state VARCHAR(50)
+        dc_id VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        location VARCHAR(100)
     );
 
     CREATE TABLE customer (
-        customer_id SERIAL PRIMARY KEY,
-        first_name VARCHAR(50),
-        last_name VARCHAR(50),
-        email VARCHAR(100),
-        loyalty_tier VARCHAR(20),
-        created_date DATE
+        customer_id VARCHAR(20) PRIMARY KEY,
+        loyalty_id VARCHAR(50),
+        segment VARCHAR(50)
     );
 
     CREATE TABLE supplier (
-        supplier_id SERIAL PRIMARY KEY,
+        supplier_id VARCHAR(20) PRIMARY KEY,
         supplier_name VARCHAR(100) NOT NULL,
-        lead_time_days INTEGER
-    );
-
-    CREATE TABLE supplier_product (
-        supplier_id INTEGER REFERENCES supplier(supplier_id),
-        product_id INTEGER REFERENCES product(product_id),
-        supplier_cost DECIMAL(10,2),
-        PRIMARY KEY (supplier_id, product_id)
+        lead_time_days INTEGER,
+        payment_terms VARCHAR(50)
     );
 
     CREATE TABLE sku (
-        sku_id SERIAL PRIMARY KEY,
-        product_id INTEGER REFERENCES product(product_id),
-        sku_code VARCHAR(50) UNIQUE,
-        size VARCHAR(20),
-        color VARCHAR(30)
+        sku_id VARCHAR(20) PRIMARY KEY,
+        product_id VARCHAR(20) REFERENCES product(product_id),
+        upc VARCHAR(50),
+        uom VARCHAR(20),
+        pack_size INTEGER,
+        status VARCHAR(30)
+    );
+
+    CREATE TABLE supplier_product (
+        supplier_id VARCHAR(20) REFERENCES supplier(supplier_id),
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        supplier_sku_code VARCHAR(50),
+        cost DECIMAL(10,2),
+        moq INTEGER,
+        PRIMARY KEY (supplier_id, sku_id)
     );
 
     CREATE TABLE store_inventory (
-        store_id INTEGER REFERENCES store(store_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity_on_hand INTEGER DEFAULT 0,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        store_id VARCHAR(20) REFERENCES store(store_id),
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        on_hand_qty INTEGER DEFAULT 0,
+        in_transit_qty INTEGER DEFAULT 0,
+        reorder_point INTEGER,
         PRIMARY KEY (store_id, sku_id)
     );
 
     CREATE TABLE dc_inventory (
-        dc_id INTEGER REFERENCES dc(dc_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity_on_hand INTEGER DEFAULT 0,
-        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        dc_id VARCHAR(20) REFERENCES dc(dc_id),
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        on_hand_qty INTEGER DEFAULT 0,
+        reserved_qty INTEGER DEFAULT 0,
         PRIMARY KEY (dc_id, sku_id)
     );
 
     CREATE TABLE price_list (
-        price_list_id SERIAL PRIMARY KEY,
-        price_list_name VARCHAR(100),
-        effective_date DATE,
-        end_date DATE
+        price_list_id VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100),
+        currency VARCHAR(10),
+        effective_start DATE,
+        effective_end DATE
     );
 
     CREATE TABLE price (
-        price_id SERIAL PRIMARY KEY,
-        sku_id INTEGER REFERENCES sku(sku_id),
-        price_list_id INTEGER REFERENCES price_list(price_list_id),
-        unit_price DECIMAL(10,2),
-        effective_date DATE,
-        end_date DATE
+        price_list_id VARCHAR(20) REFERENCES price_list(price_list_id),
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        store_id VARCHAR(20) REFERENCES store(store_id),
+        price DECIMAL(10,2),
+        effective_start DATE,
+        effective_end DATE,
+        PRIMARY KEY (price_list_id, sku_id, store_id)
     );
 
     CREATE TABLE promotion (
-        promotion_id SERIAL PRIMARY KEY,
-        promotion_name VARCHAR(100),
-        discount_percent DECIMAL(5,2),
+        promo_id VARCHAR(20) PRIMARY KEY,
+        promo_name VARCHAR(100),
+        type VARCHAR(50),
         start_date DATE,
         end_date DATE
     );
 
     CREATE TABLE promotion_sku (
-        promotion_id INTEGER REFERENCES promotion(promotion_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        PRIMARY KEY (promotion_id, sku_id)
+        promo_id VARCHAR(20) REFERENCES promotion(promo_id),
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        discount_type VARCHAR(30),
+        discount_value DECIMAL(10,2),
+        PRIMARY KEY (promo_id, sku_id)
     );
 
     CREATE TABLE pos_transaction (
-        transaction_id SERIAL PRIMARY KEY,
-        store_id INTEGER REFERENCES store(store_id),
-        customer_id INTEGER REFERENCES customer(customer_id),
-        transaction_date TIMESTAMP,
-        total_amount DECIMAL(12,2),
-        payment_method VARCHAR(30)
+        txn_id VARCHAR(20) PRIMARY KEY,
+        store_id VARCHAR(20) REFERENCES store(store_id),
+        customer_id VARCHAR(20) REFERENCES customer(customer_id),
+        txn_ts TIMESTAMP,
+        payment_method VARCHAR(30),
+        total_amount DECIMAL(12,2)
     );
 
     CREATE TABLE pos_transaction_line (
-        line_id SERIAL PRIMARY KEY,
-        transaction_id INTEGER REFERENCES pos_transaction(transaction_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity INTEGER,
+        txn_id VARCHAR(20) REFERENCES pos_transaction(txn_id),
+        line_no INTEGER,
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        qty INTEGER,
         unit_price DECIMAL(10,2),
         discount_amount DECIMAL(10,2) DEFAULT 0,
-        line_total DECIMAL(12,2)
+        tax_amount DECIMAL(10,2) DEFAULT 0,
+        PRIMARY KEY (txn_id, line_no)
     );
 
     CREATE TABLE purchase_order (
-        po_id SERIAL PRIMARY KEY,
-        supplier_id INTEGER REFERENCES supplier(supplier_id),
-        dc_id INTEGER REFERENCES dc(dc_id),
+        po_id VARCHAR(20) PRIMARY KEY,
+        supplier_id VARCHAR(20) REFERENCES supplier(supplier_id),
+        dc_id VARCHAR(20) REFERENCES dc(dc_id),
         order_date DATE,
         expected_date DATE,
         status VARCHAR(30)
     );
 
     CREATE TABLE purchase_order_line (
-        line_id SERIAL PRIMARY KEY,
-        po_id INTEGER REFERENCES purchase_order(po_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity INTEGER,
-        unit_cost DECIMAL(10,2)
+        po_id VARCHAR(20) REFERENCES purchase_order(po_id),
+        line_no INTEGER,
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        qty_ordered INTEGER,
+        unit_cost DECIMAL(10,2),
+        PRIMARY KEY (po_id, line_no)
     );
 
     CREATE TABLE goods_receipt (
-        receipt_id SERIAL PRIMARY KEY,
-        po_id INTEGER REFERENCES purchase_order(po_id),
-        dc_id INTEGER REFERENCES dc(dc_id),
-        receipt_date DATE
+        grn_id VARCHAR(20) PRIMARY KEY,
+        po_id VARCHAR(20) REFERENCES purchase_order(po_id),
+        received_date DATE,
+        status VARCHAR(30)
     );
 
     CREATE TABLE goods_receipt_line (
-        line_id SERIAL PRIMARY KEY,
-        receipt_id INTEGER REFERENCES goods_receipt(receipt_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity_received INTEGER
+        grn_id VARCHAR(20) REFERENCES goods_receipt(grn_id),
+        line_no INTEGER,
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        qty_received INTEGER,
+        qty_damaged INTEGER DEFAULT 0,
+        PRIMARY KEY (grn_id, line_no)
     );
 
     CREATE TABLE return (
-        return_id SERIAL PRIMARY KEY,
-        transaction_id INTEGER REFERENCES pos_transaction(transaction_id),
-        store_id INTEGER REFERENCES store(store_id),
-        return_date DATE,
-        reason VARCHAR(100)
+        return_id VARCHAR(20) PRIMARY KEY,
+        txn_id VARCHAR(20) REFERENCES pos_transaction(txn_id),
+        store_id VARCHAR(20) REFERENCES store(store_id),
+        return_ts TIMESTAMP,
+        reason_code VARCHAR(50)
     );
 
     CREATE TABLE return_line (
-        line_id SERIAL PRIMARY KEY,
-        return_id INTEGER REFERENCES return(return_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity INTEGER,
-        refund_amount DECIMAL(10,2)
+        return_id VARCHAR(20) REFERENCES return(return_id),
+        line_no INTEGER,
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        qty INTEGER,
+        refund_amount DECIMAL(10,2),
+        PRIMARY KEY (return_id, line_no)
     );
 
     CREATE TABLE transfer_order (
-        transfer_id SERIAL PRIMARY KEY,
-        from_dc_id INTEGER REFERENCES dc(dc_id),
-        to_store_id INTEGER REFERENCES store(store_id),
-        transfer_date DATE,
+        to_id VARCHAR(20) PRIMARY KEY,
+        from_dc_id VARCHAR(20) REFERENCES dc(dc_id),
+        to_store_id VARCHAR(20) REFERENCES store(store_id),
+        ship_date DATE,
         status VARCHAR(30)
     );
 
     CREATE TABLE transfer_order_line (
-        line_id SERIAL PRIMARY KEY,
-        transfer_id INTEGER REFERENCES transfer_order(transfer_id),
-        sku_id INTEGER REFERENCES sku(sku_id),
-        quantity INTEGER
+        to_id VARCHAR(20) REFERENCES transfer_order(to_id),
+        line_no INTEGER,
+        sku_id VARCHAR(20) REFERENCES sku(sku_id),
+        qty_shipped INTEGER,
+        qty_received INTEGER,
+        PRIMARY KEY (to_id, line_no)
     );
+
+    -- Create useful views for agents
+    CREATE OR REPLACE VIEW v_sales_summary AS
+    SELECT
+        s.store_id, s.name as store_name, s.region,
+        DATE(t.txn_ts) as sale_date,
+        COUNT(DISTINCT t.txn_id) as transaction_count,
+        SUM(t.total_amount) as total_revenue,
+        SUM(tl.qty) as units_sold
+    FROM pos_transaction t
+    JOIN store s ON t.store_id = s.store_id
+    JOIN pos_transaction_line tl ON t.txn_id = tl.txn_id
+    GROUP BY s.store_id, s.name, s.region, DATE(t.txn_ts);
+
+    CREATE OR REPLACE VIEW v_inventory_status AS
+    SELECT
+        s.store_id, s.name as store_name,
+        sk.sku_id, p.product_name,
+        si.on_hand_qty, si.in_transit_qty, si.reorder_point,
+        CASE WHEN si.on_hand_qty <= si.reorder_point THEN 'LOW' ELSE 'OK' END as stock_status
+    FROM store_inventory si
+    JOIN store s ON si.store_id = s.store_id
+    JOIN sku sk ON si.sku_id = sk.sku_id
+    JOIN product p ON sk.product_id = p.product_id;
     """
 
     with conn.cursor() as cur:
@@ -281,12 +311,12 @@ def load_table(conn, table_name: str, excel_file: Path):
     """Load data from Excel into table."""
     if not excel_file.exists():
         print(f"  Skipping {table_name} - file not found")
-        return
+        return 0
 
     df = pd.read_excel(excel_file)
     if df.empty:
         print(f"  Skipping {table_name} - no data")
-        return
+        return 0
 
     # Convert column names to lowercase
     df.columns = [c.lower() for c in df.columns]
@@ -295,51 +325,80 @@ def load_table(conn, table_name: str, excel_file: Path):
     columns = ", ".join(df.columns)
     placeholders = ", ".join(["%s"] * len(df.columns))
 
-    insert_sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+    insert_sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
 
-    # Insert rows
-    with conn.cursor() as cur:
-        for _, row in df.iterrows():
-            values = [None if pd.isna(v) else v for v in row.values]
+    # Batch insert for better performance
+    success_count = 0
+    batch_size = 100
+    rows = []
+
+    for _, row in df.iterrows():
+        values = tuple(None if pd.isna(v) else v for v in row.values)
+        rows.append(values)
+
+        if len(rows) >= batch_size:
             try:
-                cur.execute(insert_sql, values)
+                with conn.cursor() as cur:
+                    cur.executemany(insert_sql, rows)
+                conn.commit()
+                success_count += len(rows)
             except Exception as e:
-                print(f"    Error inserting row: {e}")
+                conn.rollback()
+                print(f"    Batch error: {e}")
+            rows = []
 
-    conn.commit()
-    print(f"  Loaded {len(df)} rows into {table_name}")
+    # Insert remaining rows
+    if rows:
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(insert_sql, rows)
+            conn.commit()
+            success_count += len(rows)
+        except Exception as e:
+            conn.rollback()
+            print(f"    Final batch error: {e}")
+
+    print(f"  Loaded {success_count} rows into {table_name}")
+    return success_count
 
 
 def update_dates(conn):
     """Update transaction dates to be recent (for data freshness)."""
-    print("Updating dates to be recent...")
+    print("\nUpdating dates to be recent...")
 
-    with conn.cursor() as cur:
-        # Get the most recent transaction date
-        cur.execute("SELECT MAX(transaction_date) FROM pos_transaction")
-        max_date = cur.fetchone()[0]
+    try:
+        with conn.cursor() as cur:
+            # Get the most recent transaction date
+            cur.execute("SELECT MAX(txn_ts) FROM pos_transaction")
+            max_date = cur.fetchone()[0]
 
-        if max_date:
-            # Calculate days to shift
-            today = datetime.now()
-            days_diff = (today - max_date).days - 7  # Make data 7 days old
+            if max_date:
+                # Calculate days to shift
+                today = datetime.now()
+                days_diff = (today - max_date).days - 7  # Make data 7 days old
 
-            if days_diff > 0:
-                # Update all date columns
-                cur.execute(f"UPDATE pos_transaction SET transaction_date = transaction_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE purchase_order SET order_date = order_date + INTERVAL '{days_diff} days', expected_date = expected_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE goods_receipt SET receipt_date = receipt_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE return SET return_date = return_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE transfer_order SET transfer_date = transfer_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE promotion SET start_date = start_date + INTERVAL '{days_diff} days', end_date = end_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE price SET effective_date = effective_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE price_list SET effective_date = effective_date + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE store_inventory SET last_updated = last_updated + INTERVAL '{days_diff} days'")
-                cur.execute(f"UPDATE dc_inventory SET last_updated = last_updated + INTERVAL '{days_diff} days'")
+                if days_diff > 0:
+                    print(f"  Shifting dates forward by {days_diff} days...")
 
-                print(f"  Shifted dates forward by {days_diff} days")
+                    # Update all date columns
+                    cur.execute(f"UPDATE pos_transaction SET txn_ts = txn_ts + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE purchase_order SET order_date = order_date + INTERVAL '{days_diff} days', expected_date = expected_date + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE goods_receipt SET received_date = received_date + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE return SET return_ts = return_ts + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE transfer_order SET ship_date = ship_date + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE promotion SET start_date = start_date + INTERVAL '{days_diff} days', end_date = end_date + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE price SET effective_start = effective_start + INTERVAL '{days_diff} days', effective_end = effective_end + INTERVAL '{days_diff} days'")
+                    cur.execute(f"UPDATE price_list SET effective_start = effective_start + INTERVAL '{days_diff} days', effective_end = effective_end + INTERVAL '{days_diff} days'")
 
-    conn.commit()
+                    conn.commit()
+                    print(f"  Dates updated!")
+                else:
+                    print("  Data is already recent, no update needed.")
+            else:
+                print("  No transactions found to update.")
+    except Exception as e:
+        conn.rollback()
+        print(f"  Error updating dates: {e}")
 
 
 def main():
@@ -350,7 +409,7 @@ def main():
 
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        print("Connected successfully!")
+        print("Connected successfully!\n")
     except Exception as e:
         print(f"Connection failed: {e}")
         sys.exit(1)
@@ -369,8 +428,8 @@ def main():
             ("dc", "DC.xlsx"),
             ("customer", "CUSTOMER.xlsx"),
             ("supplier", "SUPPLIER.xlsx"),
-            ("supplier_product", "SUPPLIER_PRODUCT.xlsx"),
             ("sku", "SKU.xlsx"),
+            ("supplier_product", "SUPPLIER_PRODUCT.xlsx"),
             ("store_inventory", "STORE_INVENTORY.xlsx"),
             ("dc_inventory", "DC_INVENTORY.xlsx"),
             ("price_list", "PRICE_LIST.xlsx"),
@@ -389,16 +448,20 @@ def main():
             ("transfer_order_line", "TRANSFER_ORDER_LINE.xlsx"),
         ]
 
+        total_rows = 0
         for table_name, file_name in tables:
-            load_table(conn, table_name, DATA_DIR / file_name)
+            total_rows += load_table(conn, table_name, DATA_DIR / file_name)
 
         # Update dates to be recent
         update_dates(conn)
 
         print("\n" + "=" * 60)
-        print("Database setup complete!")
+        print(f"Database setup complete! Loaded {total_rows} total rows.")
         print("=" * 60)
 
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
     finally:
         conn.close()
 
