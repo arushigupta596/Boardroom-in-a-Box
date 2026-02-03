@@ -42,6 +42,12 @@ Boardroom-in-a-Box simulates a C-suite executive meeting where AI agents (CEO, C
 - **SQL Analyst**: Questions → SQL with guardrails
 - **Conflict Detector**: Finds soft conflicts between agents
 
+### Natural Language Chat Interface (LangChain)
+- **Ask Questions in Plain English**: Type questions like "How are we doing this quarter?" or "Why are margins declining?"
+- **Automatic Flow Selection**: AI analyzes your question and selects the appropriate agent flow
+- **Full Agent Analysis**: Runs complete agent workflow with real database queries
+- **Unified Display**: Results displayed in same format as manual flow runs (KPIs, insights, conflicts)
+
 ### Flows
 | Flow | Description | Agents |
 |------|-------------|--------|
@@ -120,6 +126,12 @@ Navigate to **http://localhost:3000**
 
 ### Web UI
 
+**Option 1: Natural Language (Recommended)**
+1. Type your question in the input field (e.g., "How are margins trending?" or "What's causing low inventory turnover?")
+2. Click **Ask** - the AI automatically selects the appropriate flow
+3. View full analysis with agent outputs, KPIs, conflicts, and recommendations
+
+**Option 2: Manual Flow Selection**
 1. Select a **Flow Type** (KPI Review, Trade-off, Scenario, Root Cause)
 2. Select a **Display Mode** (Summary, Debate, Operator, Audit)
 3. Click **Run Analysis**
@@ -148,6 +160,7 @@ python run_boardroom_v3.py --export memo --output memo.md
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/health` | GET | Health check |
+| `/api/chat` | POST | **Natural language chat** - AI selects flow & returns full analysis |
 | `/api/flows/stream/{flow}` | GET | SSE streaming flow execution |
 | `/api/flows/kpi-review` | POST | Run KPI Review |
 | `/api/flows/trade-off` | POST | Run Trade-off debate |
@@ -157,10 +170,21 @@ python run_boardroom_v3.py --export memo --output memo.md
 | `/api/sessions/{id}` | GET | Get session details |
 | `/api/sessions/{id}/memo` | GET | Get board memo |
 
-### Natural Language (requires OpenRouter API key)
+### Natural Language Chat (requires OpenRouter API key)
 
 ```bash
-# Ask a question
+# Ask a question - AI automatically selects the right flow and runs full analysis
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How are margins trending this quarter?"}'
+
+# Response includes: flow_used, agent_outputs, handoffs, evaluation, conflicts
+```
+
+### Legacy Natural Language Endpoints
+
+```bash
+# Ask a question (simple response)
 curl -X POST http://localhost:8000/api/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "How are we doing this quarter?"}'
@@ -240,7 +264,8 @@ boardroom-agents-for-retail/
 │   ├── intent_router.py      # LLM intent routing
 │   ├── sql_analyst.py        # LLM SQL generation
 │   ├── conflict_detector.py  # LLM conflict detection
-│   └── llm_client.py         # OpenRouter client
+│   ├── llm_client.py         # OpenRouter client
+│   └── langchain_orchestrator.py  # LangChain NLP routing & decision synthesis
 ├── api/                       # FastAPI backend
 │   └── main.py
 ├── frontend/                  # Next.js frontend
@@ -464,11 +489,12 @@ Before running any analysis, the CIO's Confidence Engine validates data quality.
 
 | Model | Use Case |
 |-------|----------|
-| Claude Haiku | Intent routing (fast) |
-| Claude Haiku | SQL generation (fast) |
-| Claude Haiku | Conflict detection |
+| Claude 3 Haiku | Intent routing (fast) |
+| Claude 3 Haiku | SQL generation (fast) |
+| Claude 3 Haiku | Conflict detection |
+| Claude 3 Haiku | LangChain flow routing & decision synthesis |
 
-To change models, edit `agents/llm_client.py`.
+To change models, edit `agents/llm_client.py` or `agents/langchain_orchestrator.py`.
 
 ## Development
 
