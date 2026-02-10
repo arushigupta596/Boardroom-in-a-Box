@@ -64,16 +64,20 @@ class LangChainOrchestrator:
     4. LLM synthesizes results into a decision
     """
 
-    def __init__(self, model: str = "anthropic/claude-3-5-sonnet"):
+    def __init__(self, model: Optional[str] = None):
         """
         Initialize the LangChain orchestrator.
 
         Args:
-            model: OpenRouter model to use
+            model: OpenRouter model to use (defaults to OPENROUTER_MODEL env var or claude-3-5-haiku)
         """
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable not set")
+
+        # Get model from environment variable if not specified
+        if model is None:
+            model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-5-haiku")
 
         # Initialize LangChain with OpenRouter
         self.llm = ChatOpenAI(
@@ -84,9 +88,9 @@ class LangChainOrchestrator:
             max_tokens=2000,
         )
 
-        # Fast model for routing and quick analysis
+        # Fast model for routing and quick analysis (use same model for consistency)
         self.router_llm = ChatOpenAI(
-            model="anthropic/claude-3-haiku",
+            model=model,
             openai_api_key=self.api_key,
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=0.1,

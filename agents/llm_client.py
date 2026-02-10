@@ -19,6 +19,7 @@ class LLMModel(Enum):
     CLAUDE_HAIKU = "anthropic/claude-3-5-haiku"
     GPT4O_MINI = "openai/gpt-4o-mini"
     LLAMA_70B = "meta-llama/llama-3.1-70b-instruct"
+    LLAMA_8B_FREE = "meta-llama/llama-3.1-8b-instruct:free"
 
 
 @dataclass
@@ -45,7 +46,7 @@ class LLMClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        default_model: LLMModel = LLMModel.CLAUDE_HAIKU,
+        default_model: Optional[LLMModel] = None,
         timeout: float = 30.0,
     ):
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
@@ -54,6 +55,21 @@ class LLMClient:
                 "OpenRouter API key required. Set OPENROUTER_API_KEY environment variable "
                 "or pass api_key parameter."
             )
+
+        # Allow model to be set via environment variable
+        if default_model is None:
+            model_str = os.environ.get("OPENROUTER_MODEL")
+            if model_str:
+                # Try to find matching enum value
+                for model_enum in LLMModel:
+                    if model_enum.value == model_str:
+                        default_model = model_enum
+                        break
+                else:
+                    # Model string not found in enum, use CLAUDE_HAIKU as fallback
+                    default_model = LLMModel.CLAUDE_HAIKU
+            else:
+                default_model = LLMModel.CLAUDE_HAIKU
 
         self.default_model = default_model
         self.timeout = timeout
