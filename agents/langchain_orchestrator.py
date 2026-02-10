@@ -340,12 +340,58 @@ Conflicts: {len(eval_data.conflicts)}
         try:
             return self.decision_parser.parse(response.content)
         except Exception as e:
+            # Try to extract JSON from response text
+            import re
+            content = response.content
+
+            # Try extracting from markdown code blocks first
+            json_str = None
+            if '```json' in content:
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+            elif '```' in content:
+                json_match = re.search(r'```\s*(\{.*?\})\s*```', content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+
+            # If no code blocks, look for JSON object in the text
+            if not json_str:
+                # Look for a complete JSON object with summary field
+                json_match = re.search(r'\{\s*"summary"[^}]*?"next_steps"\s*:\s*\[.*?\]\s*\}', content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group()
+                else:
+                    # Try to find any JSON object
+                    json_match = re.search(r'\{[^{}]*"summary"[^{}]*\}', content, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group()
+
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                    return DecisionSummary(
+                        summary=data.get('summary', content[:500]),
+                        key_findings=data.get('key_findings', ["Analysis complete - see details above"]),
+                        recommendations=data.get('recommendations', ["Review agent outputs for specific recommendations"]),
+                        risks=data.get('risks', []),
+                        confidence_level=data.get('confidence_level', 'Medium'),
+                        next_steps=data.get('next_steps', [])
+                    )
+                except Exception as parse_error:
+                    print(f"JSON parse error: {parse_error}")
+                    print(f"Attempted to parse: {json_str[:200]}...")
+
+            # Fallback: parse plain text response
+            lines = content.split('\n')
+            summary = content[:500] if len(content) < 500 else content[:497] + "..."
+
             # Return a basic summary if parsing fails
             return DecisionSummary(
-                summary=response.content[:500],
+                summary=summary,
                 key_findings=["Analysis complete - see details above"],
                 recommendations=["Review agent outputs for specific recommendations"],
-                risks=["Unable to parse structured risks"],
+                risks=[],
                 confidence_level="Medium",
                 next_steps=["Review detailed agent outputs"]
             )
